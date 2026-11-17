@@ -1,3 +1,6 @@
 spring:
   application:
     name: returnloop
+  jpa:
+    hibernate:
+      ddl-auto: validate
