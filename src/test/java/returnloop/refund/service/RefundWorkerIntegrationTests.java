@@ -1,11 +1,20 @@
 package returnloop.refund.service;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+
 import returnloop.payment.domain.Payment;
 import returnloop.payment.domain.PaymentRepository;
+import returnloop.refund.dto.RefundResult;
 import returnloop.refund.pg.RefundGateway;
+import returnloop.refund.pg.RefundGateway.QueryResult;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -27,6 +36,8 @@ import static org.mockito.Mockito.*;
 @Testcontainers
 @Import(RefundWorker.class)
 class RefundWorkerIntegrationTests {
+
+	private static final Instant INITIAL_TIME = Instant.parse("2026-11-20T00:00:00Z");
 
 	@Container
 	@ServiceConnection
@@ -50,8 +61,12 @@ class RefundWorkerIntegrationTests {
 	@MockitoBean
 	RefundGateway gateway;
 
+	@MockitoBean
+	Clock clock;
+
 	@BeforeEach
-	void 테스트_DB를_정리한다() {
+	void 테스트를_준비한다() {
+		when(clock.instant()).thenReturn(INITIAL_TIME);
 		new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
 			jdbc.update("DELETE FROM refund_job");
 			jdbc.update("DELETE FROM refund");
@@ -61,7 +76,7 @@ class RefundWorkerIntegrationTests {
 
 	@Test
 	void 트랜잭션_밖에서_PG를_호출하고_성공_결과를_함께_커밋한다() {
-		var target = 작업_준비();
+		JobTarget target = 작업_준비();
 		PG_성공_응답_준비(target);
 
 		new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
@@ -77,7 +92,7 @@ class RefundWorkerIntegrationTests {
 
 	@Test
 	void 작업_완료_갱신이_거부되면_성공_결과가_커밋되지_않는다() {
-		var target = 작업_준비();
+		JobTarget target = 작업_준비();
 		PG_성공_응답_준비(target);
 
 		jdbc.execute("""
@@ -85,7 +100,7 @@ class RefundWorkerIntegrationTests {
 				CHECK (status <> 'COMPLETED')
 				""");
 		try {
-			var error = assertThrows(DataAccessException.class, () -> worker.process(target.jobId()));
+			DataAccessException error = assertThrows(DataAccessException.class, () -> worker.process(target.jobId()));
 
 			assertTrue(error.getMostSpecificCause().getMessage().contains("ck_test_reject_job_completion"));
 			verify(gateway).refund(target.paymentId(), 15000L, target.key());
@@ -95,23 +110,103 @@ class RefundWorkerIntegrationTests {
 		}
 	}
 
-	private 작업대상 작업_준비() {
-		Long paymentId = new TransactionTemplate(transactionManager).execute(status ->
-				paymentRepository.saveAndFlush(new Payment(15000L)).getId());
-		var refund = refundService.createRefund(paymentId);
-		Long jobId = jdbc.queryForObject("SELECT id FROM refund_job WHERE refund_id = ?", Long.class, refund.id());
-		String key = jdbc.queryForObject("SELECT idempotency_key FROM refund WHERE id = ?", String.class, refund.id());
-		return new 작업대상(paymentId, refund.id(), jobId, key);
+	@ParameterizedTest
+	@CsvSource({"SUCCEEDED, REFUNDED", "FAILED, PAID"})
+	void 환불_응답이_유실되면_같은_키로_조회한_확정_결과를_저장한다(
+			QueryResult queryResult, String paymentStatus) {
+		JobTarget target = 작업_준비();
+		PG_환불_타임아웃_준비(target);
+		when(gateway.query(target.key())).thenAnswer(invocation -> {
+			assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+			return queryResult;
+		});
+
+		worker.process(target.jobId());
+
+		verify(gateway, never()).query(target.key());
+		저장_상태_확인(target, "UNKNOWN", "PAID", "PENDING");
+		조회_일정_확인(target.jobId(), 0, INITIAL_TIME);
+
+		worker.process(target.jobId());
+		worker.process(target.jobId());
+
+		verify(gateway).refund(target.paymentId(), 15000L, target.key());
+		verify(gateway).query(target.key());
+		verifyNoMoreInteractions(gateway);
+		저장_상태_확인(target, queryResult.name(), paymentStatus, "COMPLETED");
+		조회_일정_확인(target.jobId(), 1, null);
 	}
 
-	private void PG_성공_응답_준비(작업대상 target) {
+	@Test
+	void 확정_결과가_없으면_예약_시각에만_조회하고_세_번_후_중단한다() {
+		JobTarget target = 작업_준비();
+		PG_환불_타임아웃_준비(target);
+		when(gateway.query(target.key()))
+				.thenReturn(QueryResult.NOT_FOUND)
+				.thenThrow(new RefundGateway.TimeoutException("PG query timed out"))
+				.thenReturn(QueryResult.UNAVAILABLE);
+
+		worker.process(target.jobId());
+		worker.process(target.jobId());
+
+		조회_일정_확인(target.jobId(), 1, INITIAL_TIME.plusSeconds(5));
+		when(clock.instant()).thenReturn(INITIAL_TIME.plusSeconds(4));
+		worker.process(target.jobId());
+		verify(gateway, times(1)).query(target.key());
+
+		when(clock.instant()).thenReturn(INITIAL_TIME.plusSeconds(5));
+		worker.process(target.jobId());
+
+		저장_상태_확인(target, "UNKNOWN", "PAID", "PENDING");
+		조회_일정_확인(target.jobId(), 2, INITIAL_TIME.plusSeconds(35));
+		when(clock.instant()).thenReturn(INITIAL_TIME.plusSeconds(34));
+		worker.process(target.jobId());
+		verify(gateway, times(2)).query(target.key());
+
+		when(clock.instant()).thenReturn(INITIAL_TIME.plusSeconds(35));
+		worker.process(target.jobId());
+		when(clock.instant()).thenReturn(INITIAL_TIME.plusSeconds(3600));
+		worker.process(target.jobId());
+
+		저장_상태_확인(target, "UNKNOWN", "PAID", "NEEDS_REVIEW");
+		조회_일정_확인(target.jobId(), 3, null);
+		verify(gateway).refund(target.paymentId(), 15000L, target.key());
+		verify(gateway, times(3)).query(target.key());
+		verifyNoMoreInteractions(gateway);
+	}
+
+	private void PG_환불_타임아웃_준비(JobTarget target) {
+		when(gateway.refund(target.paymentId(), 15000L, target.key())).thenThrow(
+				new RefundGateway.TimeoutException("PG refund timed out"));
+	}
+
+	private void 조회_일정_확인(long jobId, int queryCount, Instant nextRunAt) {
+		jdbc.queryForObject("SELECT operation, query_count, next_run_at FROM refund_job WHERE id = ?", (row, index) -> {
+			assertEquals("QUERY_PG", row.getString("operation"));
+			assertEquals(queryCount, row.getInt("query_count"));
+			LocalDateTime stored = row.getObject("next_run_at", LocalDateTime.class);
+			assertEquals(nextRunAt, stored == null ? null : stored.toInstant(ZoneOffset.UTC));
+			return jobId;
+		}, jobId);
+	}
+
+	private JobTarget 작업_준비() {
+		Long paymentId = new TransactionTemplate(transactionManager).execute(status ->
+				paymentRepository.saveAndFlush(new Payment(15000L)).getId());
+		RefundResult refund = refundService.createRefund(paymentId);
+		Long jobId = jdbc.queryForObject("SELECT id FROM refund_job WHERE refund_id = ?", Long.class, refund.id());
+		String key = jdbc.queryForObject("SELECT idempotency_key FROM refund WHERE id = ?", String.class, refund.id());
+		return new JobTarget(paymentId, refund.id(), jobId, key);
+	}
+
+	private void PG_성공_응답_준비(JobTarget target) {
 		when(gateway.refund(target.paymentId(), 15000L, target.key())).thenAnswer(invocation -> {
 			assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
 			return RefundGateway.Result.SUCCEEDED;
 		});
 	}
 
-	private void 저장_상태_확인(작업대상 target, String refundStatus, String paymentStatus, String jobStatus) {
+	private void 저장_상태_확인(JobTarget target, String refundStatus, String paymentStatus, String jobStatus) {
 		new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
 			assertEquals(refundStatus, jdbc.queryForObject(
 					"SELECT status FROM refund WHERE id = ?", String.class, target.refundId()));
@@ -122,6 +217,6 @@ class RefundWorkerIntegrationTests {
 		});
 	}
 
-	private record 작업대상(long paymentId, long refundId, long jobId, String key) {
+	private record JobTarget(long paymentId, long refundId, long jobId, String key) {
 	}
 }

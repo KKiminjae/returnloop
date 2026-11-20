@@ -7,6 +7,7 @@ import returnloop.payment.exception.PaymentNotFoundException;
 import returnloop.refund.domain.Refund;
 import returnloop.refund.domain.RefundRepository;
 import returnloop.refund.domain.RefundStatus;
+import returnloop.refund.dto.RefundResult;
 import returnloop.refund.exception.RefundStateInconsistentException;
 
 import java.util.Arrays;
@@ -68,7 +69,7 @@ class RefundServiceIntegrationTests {
 		Long paymentId = 결제_준비();
 		assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
 
-		var result = service.createRefund(paymentId);
+		RefundResult result = service.createRefund(paymentId);
 
 		assertTrue(result.created());
 		assertEquals(paymentId, result.paymentId());
@@ -92,7 +93,7 @@ class RefundServiceIntegrationTests {
 				ALTER TABLE refund_job ADD CONSTRAINT ck_test_reject_refund_job CHECK (refund_id < 0)
 				""");
 		try {
-			var error = assertThrows(DataAccessException.class, () -> service.createRefund(paymentId));
+			DataAccessException error = assertThrows(DataAccessException.class, () -> service.createRefund(paymentId));
 			assertTrue(error.getMostSpecificCause().getMessage().contains("ck_test_reject_refund_job"));
 			new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
 				assertEquals(0, refundRepository.count());
@@ -109,7 +110,7 @@ class RefundServiceIntegrationTests {
 		Long refundId = new TransactionTemplate(transactionManager).execute(status ->
 				refundRepository.saveAndFlush(new Refund(paymentRepository.findById(paymentId).orElseThrow())).getId());
 
-		var result = service.createRefund(paymentId);
+		RefundResult result = service.createRefund(paymentId);
 
 		assertFalse(result.created());
 		assertEquals(refundId, result.id());
@@ -121,14 +122,14 @@ class RefundServiceIntegrationTests {
 	void 기존_환불은_결제와_환불_상태에_관계없이_같은_정보를_반환한다(
 			PaymentStatus paymentStatus, RefundStatus refundStatus) {
 		Long paymentId = 결제_준비();
-		var first = service.createRefund(paymentId);
+		RefundResult first = service.createRefund(paymentId);
 		new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
 			jdbc.update("UPDATE payment SET status = ? WHERE id = ?", paymentStatus.name(), paymentId);
 			jdbc.update("UPDATE refund SET status = ? WHERE id = ?", refundStatus.name(), first.id());
 		});
 		String key = jdbc.queryForObject("SELECT idempotency_key FROM refund WHERE id = ?", String.class, first.id());
 
-		var repeated = service.createRefund(paymentId);
+		RefundResult repeated = service.createRefund(paymentId);
 
 		assertFalse(repeated.created());
 		assertEquals(first.id(), repeated.id());

@@ -75,4 +75,12 @@ public class Refund {
 	public void markSucceeded() {
 		status = RefundStatus.SUCCEEDED;
 	}
+
+	public void markUnknown() {
+		status = RefundStatus.UNKNOWN;
+	}
+
+	public void markFailed() {
+		status = RefundStatus.FAILED;
+	}
 }

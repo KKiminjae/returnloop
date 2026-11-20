@@ -1,5 +1,6 @@
 package returnloop.refund.domain;
 
+import java.time.Instant;
 import java.util.Objects;
 
 import jakarta.persistence.Column;
@@ -33,27 +34,73 @@ public class RefundJob {
 	@Column(nullable = false, length = 20)
 	private Status status;
 
+	@Enumerated(EnumType.STRING)
+	@JdbcTypeCode(SqlTypes.VARCHAR)
+	@Column(nullable = false, length = 20)
+	private Operation operation;
+
+	@Column(name = "query_count", nullable = false)
+	private int queryCount;
+
+	@Column(name = "next_run_at")
+	private Instant nextRunAt;
+
 	protected RefundJob() {
 	}
 
 	public RefundJob(Refund refund) {
 		this.refund = Objects.requireNonNull(refund, "Refund must not be null");
 		this.status = Status.PENDING;
+		this.operation = Operation.EXECUTE_REFUND;
 	}
 
 	public Refund getRefund() {
 		return refund;
 	}
 
-	public boolean isPending() {
-		return status == Status.PENDING;
+	public Operation getOperation() {
+		return operation;
+	}
+
+	public boolean isReady(Instant now) {
+		return status == Status.PENDING && (nextRunAt == null || !now.isBefore(nextRunAt));
+	}
+
+	public boolean isPending(Operation expectedOperation) {
+		return status == Status.PENDING && operation == expectedOperation;
+	}
+
+	public void scheduleQuery(Instant now) {
+		operation = Operation.QUERY_PG;
+		nextRunAt = now;
+	}
+
+	public void recordUnresolvedQuery(Instant now) {
+		queryCount++;
+		switch (queryCount) {
+			case 1 -> nextRunAt = now.plusSeconds(5);
+			case 2 -> nextRunAt = now.plusSeconds(30);
+			case 3 -> {
+				status = Status.NEEDS_REVIEW;
+				nextRunAt = null;
+			}
+			default -> throw new IllegalStateException("Refund job query limit exceeded");
+		}
 	}
 
 	public void complete() {
+		if (operation == Operation.QUERY_PG) {
+			queryCount++;
+		}
 		status = Status.COMPLETED;
+		nextRunAt = null;
+	}
+
+	public enum Operation {
+		EXECUTE_REFUND, QUERY_PG
 	}
 
 	private enum Status {
-		PENDING, COMPLETED
+		PENDING, COMPLETED, NEEDS_REVIEW
 	}
 }
