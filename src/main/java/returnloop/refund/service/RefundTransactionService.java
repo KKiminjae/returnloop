@@ -7,6 +7,8 @@ import returnloop.payment.domain.PaymentRepository;
 import returnloop.payment.domain.PaymentStatus;
 import returnloop.payment.exception.PaymentNotFoundException;
 import returnloop.refund.domain.Refund;
+import returnloop.refund.domain.RefundJob;
+import returnloop.refund.domain.RefundJobRepository;
 import returnloop.refund.domain.RefundRepository;
 import returnloop.refund.exception.RefundStateInconsistentException;
 
@@ -25,10 +27,13 @@ public class RefundTransactionService {
 
 	private final PaymentRepository paymentRepository;
 	private final RefundRepository refundRepository;
+	private final RefundJobRepository refundJobRepository;
 
-	public RefundTransactionService(PaymentRepository paymentRepository, RefundRepository refundRepository) {
+	public RefundTransactionService(PaymentRepository paymentRepository, RefundRepository refundRepository,
+			RefundJobRepository refundJobRepository) {
 		this.paymentRepository = paymentRepository;
 		this.refundRepository = refundRepository;
+		this.refundJobRepository = refundJobRepository;
 	}
 
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -44,6 +49,7 @@ public class RefundTransactionService {
 			throw new RefundStateInconsistentException(paymentId);
 		}
 		Refund refund = refundRepository.saveAndFlush(new Refund(payment));
+		refundJobRepository.save(new RefundJob(refund));
 		return RefundResult.from(refund, true);
 	}
 
