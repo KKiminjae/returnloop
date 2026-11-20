@@ -1,0 +1,3 @@
+ALTER TABLE refund_job
+    ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    ADD CONSTRAINT ck_refund_job_status CHECK (status IN ('PENDING', 'COMPLETED'));

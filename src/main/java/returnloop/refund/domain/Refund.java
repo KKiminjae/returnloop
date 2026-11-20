@@ -71,4 +71,8 @@ public class Refund {
 	public String getIdempotencyKey() {
 		return idempotencyKey;
 	}
+
+	public void markSucceeded() {
+		status = RefundStatus.SUCCEEDED;
+	}
 }

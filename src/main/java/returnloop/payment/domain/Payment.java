@@ -49,4 +49,8 @@ public class Payment {
 	public PaymentStatus getStatus() {
 		return status;
 	}
+
+	public void markRefunded() {
+		status = PaymentStatus.REFUNDED;
+	}
 }

@@ -36,12 +36,14 @@ class ReturnloopApplicationTests {
 
 	@Test
 	void 마이그레이션은_한_번만_적용된다() {
-		assertEquals("2", flyway.info().current().getVersion().getVersion());
+		assertEquals("3", flyway.info().current().getVersion().getVersion());
 		assertEquals(0, flyway.migrate().migrationsExecuted);
 		assertEquals(1, jdbc.queryForObject(
 				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '1' AND success = 1", Integer.class));
 		assertEquals(1, jdbc.queryForObject(
 				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '2' AND success = 1", Integer.class));
+		assertEquals(1, jdbc.queryForObject(
+				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '3' AND success = 1", Integer.class));
 	}
 
 	@Test
