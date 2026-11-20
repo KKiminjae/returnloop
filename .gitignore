@@ -40,3 +40,14 @@ out/
 .env
 .env.*
 !.env.example
+
+### Markdown: publish only reviewed documents ###
+*.md
+!/README.md
+!/docs/DESIGN.md
+!/docs/evidence/E01-01-schema.md
+!/docs/evidence/E01-02-entities.md
+!/docs/evidence/E01-03-service.md
+
+# macOS Finder metadata
+.DS_Store
