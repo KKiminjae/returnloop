@@ -3,13 +3,14 @@ package returnloop.refund.pg;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 
 import returnloop.payment.domain.Payment;
 import returnloop.payment.domain.PaymentRepository;
 import returnloop.refund.dto.RefundResult;
 import returnloop.refund.service.RefundService;
-import returnloop.refund.service.RefundWorker;
+import returnloop.refund.worker.RefundWorker;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -79,6 +80,9 @@ class RefundHttpIntegrationTests {
 			assertEquals(refundRequests + 1, pg.환불_요청_횟수());
 			assertEquals(executions + 1, pg.환불_실행_횟수());
 			assertEquals(queries + 1, pg.조회_횟수());
+			assertEquals(List.of("EXECUTE_REFUND:TIMEOUT", "QUERY_PG:SUCCEEDED"), jdbc.query("""
+					SELECT operation, outcome FROM refund_attempt WHERE refund_id = ? ORDER BY id
+					""", (row, index) -> row.getString("operation") + ":" + row.getString("outcome"), refund.id()));
 		} finally {
 			pg.응답_보류를_해제한다();
 		}

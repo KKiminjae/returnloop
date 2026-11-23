@@ -1,14 +1,16 @@
-package returnloop.refund.service;
+package returnloop.refund.worker;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Optional;
 
 import returnloop.refund.domain.RefundJob.Operation;
+import returnloop.refund.domain.RefundAttempt.Outcome;
 import returnloop.refund.pg.RefundGateway;
 import returnloop.refund.pg.RefundGateway.QueryResult;
 import returnloop.refund.pg.RefundGateway.Result;
 import returnloop.refund.pg.RefundGateway.TimeoutException;
-import returnloop.refund.service.RefundWorkerTransactionService.RefundRequest;
+import returnloop.refund.worker.RefundWorkerTransactionService.RefundRequest;
 
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,26 +43,29 @@ public class RefundWorker {
 
 	private void execute(long jobId, RefundRequest refund) {
 		Result result;
+		Instant attemptedAt = clock.instant();
 		try {
 			result = gateway.refund(refund.paymentId(), refund.amount(), refund.idempotencyKey());
 		} catch (TimeoutException exception) {
-			transactions.scheduleQuery(jobId, clock.instant());
+			transactions.scheduleQuery(jobId, attemptedAt, clock.instant());
 			return;
 		}
-		transactions.complete(jobId, Operation.EXECUTE_REFUND, result);
+		transactions.complete(jobId, Operation.EXECUTE_REFUND, result, attemptedAt);
 	}
 
 	private void query(long jobId, String idempotencyKey) {
 		QueryResult result;
+		Instant attemptedAt = clock.instant();
 		try {
 			result = gateway.query(idempotencyKey);
 		} catch (TimeoutException exception) {
 			result = QueryResult.UNAVAILABLE;
 		}
 		switch (result) {
-			case SUCCEEDED -> transactions.complete(jobId, Operation.QUERY_PG, Result.SUCCEEDED);
-			case FAILED -> transactions.complete(jobId, Operation.QUERY_PG, Result.FAILED);
-			case NOT_FOUND, UNAVAILABLE -> transactions.recordUnresolvedQuery(jobId, clock.instant());
+			case SUCCEEDED -> transactions.complete(jobId, Operation.QUERY_PG, Result.SUCCEEDED, attemptedAt);
+			case FAILED -> transactions.complete(jobId, Operation.QUERY_PG, Result.FAILED, attemptedAt);
+			case NOT_FOUND -> transactions.recordUnresolvedQuery(jobId, Outcome.NOT_FOUND, attemptedAt, clock.instant());
+			case UNAVAILABLE -> transactions.recordUnresolvedQuery(jobId, Outcome.UNAVAILABLE, attemptedAt, clock.instant());
 		}
 	}
 }

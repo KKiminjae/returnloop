@@ -55,6 +55,17 @@ DB 중복 생성 방지와 PG의 중복 금전 처리 방지는 별개다. Refun
 최소 RefundJob과 단일 Worker를 E02에 함께 도입한다. Refund / Job을 원자적으로 저장하고
 커밋 후 DB 트랜잭션 밖에서 PG를 호출한다. 결과 반영은 별도 트랜잭션으로 수행한다.
 성공 시 Payment의 REFUNDED, Refund의 SUCCEEDED, Attempt 기록과 Job 갱신을 함께 반영한다.
+RefundAttempt의 `attempted_at`에는 Worker가 PG에 요청하기 직전의 시각을 저장한다.
+POST는 성공·실패·타임아웃, GET은 성공·실패·거래 없음·조회 불가를 기록한다.
+Attempt INSERT와 해당 호출 결과의 상태 갱신은 하나의 트랜잭션에서 커밋한다.
+호출 결과를 반영하기 전에 프로세스가 종료되거나 결과 반영이 롤백되면 이력이 남지 않는다.
+
+단일 인스턴스에서 스케줄러가 실행 시각에 도달한 PENDING Job과 실행 시각이 없는
+PENDING Job을 ID 오름차순으로 최대 20개 조회한다. 각 Job을 순차 처리하고, 마지막
+처리가 끝나면 1초 뒤 다시 조회한다. Worker는 PG 호출 직전에 실행 가능 여부를 재확인한다.
+자동 실행은 기본 비활성화하며, `returnloop.refund.worker.enabled=true`로 켤 때
+`returnloop.refund.worker.pg-base-url`에 PG 주소를 지정한다.
+`returnloop.refund.worker.pg-timeout`의 기본값은 1초다.
 
 이 단계는 Worker가 계속 실행되는 조건에서의 응답 유실 복구를 검증한다.
 비정상 종료 후 자동 복구는 보장하지 않는다.

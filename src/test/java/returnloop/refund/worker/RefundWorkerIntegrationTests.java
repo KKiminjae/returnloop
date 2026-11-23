@@ -1,15 +1,17 @@
-package returnloop.refund.service;
+package returnloop.refund.worker;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import returnloop.payment.domain.Payment;
 import returnloop.payment.domain.PaymentRepository;
 import returnloop.refund.dto.RefundResult;
 import returnloop.refund.pg.RefundGateway;
 import returnloop.refund.pg.RefundGateway.QueryResult;
+import returnloop.refund.service.RefundService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,6 +70,7 @@ class RefundWorkerIntegrationTests {
 	void 테스트를_준비한다() {
 		when(clock.instant()).thenReturn(INITIAL_TIME);
 		new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+			jdbc.update("DELETE FROM refund_attempt");
 			jdbc.update("DELETE FROM refund_job");
 			jdbc.update("DELETE FROM refund");
 			jdbc.update("DELETE FROM payment");
@@ -88,6 +91,7 @@ class RefundWorkerIntegrationTests {
 
 		verify(gateway, times(1)).refund(target.paymentId(), 15000L, target.key());
 		저장_상태_확인(target, "SUCCEEDED", "REFUNDED", "COMPLETED");
+		이력_확인(target, new AttemptEntry("EXECUTE_REFUND", "SUCCEEDED", INITIAL_TIME));
 	}
 
 	@Test
@@ -105,6 +109,7 @@ class RefundWorkerIntegrationTests {
 			assertTrue(error.getMostSpecificCause().getMessage().contains("ck_test_reject_job_completion"));
 			verify(gateway).refund(target.paymentId(), 15000L, target.key());
 			저장_상태_확인(target, "PENDING", "PAID", "PENDING");
+			이력_확인(target);
 		} finally {
 			jdbc.execute("ALTER TABLE refund_job DROP CHECK ck_test_reject_job_completion");
 		}
@@ -126,7 +131,9 @@ class RefundWorkerIntegrationTests {
 		verify(gateway, never()).query(target.key());
 		저장_상태_확인(target, "UNKNOWN", "PAID", "PENDING");
 		조회_일정_확인(target.jobId(), 0, INITIAL_TIME);
+		이력_확인(target, new AttemptEntry("EXECUTE_REFUND", "TIMEOUT", INITIAL_TIME));
 
+		when(clock.instant()).thenReturn(INITIAL_TIME.plusSeconds(2));
 		worker.process(target.jobId());
 		worker.process(target.jobId());
 
@@ -135,6 +142,9 @@ class RefundWorkerIntegrationTests {
 		verifyNoMoreInteractions(gateway);
 		저장_상태_확인(target, queryResult.name(), paymentStatus, "COMPLETED");
 		조회_일정_확인(target.jobId(), 1, null);
+		이력_확인(target,
+				new AttemptEntry("EXECUTE_REFUND", "TIMEOUT", INITIAL_TIME),
+				new AttemptEntry("QUERY_PG", queryResult.name(), INITIAL_TIME.plusSeconds(2)));
 	}
 
 	@Test
@@ -173,6 +183,21 @@ class RefundWorkerIntegrationTests {
 		verify(gateway).refund(target.paymentId(), 15000L, target.key());
 		verify(gateway, times(3)).query(target.key());
 		verifyNoMoreInteractions(gateway);
+		이력_확인(target,
+				new AttemptEntry("EXECUTE_REFUND", "TIMEOUT", INITIAL_TIME),
+				new AttemptEntry("QUERY_PG", "NOT_FOUND", INITIAL_TIME),
+				new AttemptEntry("QUERY_PG", "UNAVAILABLE", INITIAL_TIME.plusSeconds(5)),
+				new AttemptEntry("QUERY_PG", "UNAVAILABLE", INITIAL_TIME.plusSeconds(35)));
+	}
+
+	private void 이력_확인(JobTarget target, AttemptEntry... expected) {
+		assertEquals(List.of(expected), jdbc.query("""
+				SELECT operation, outcome, attempted_at FROM refund_attempt WHERE refund_id = ? ORDER BY id
+				""", (row, index) -> new AttemptEntry(row.getString("operation"), row.getString("outcome"),
+				row.getObject("attempted_at", LocalDateTime.class).toInstant(ZoneOffset.UTC)), target.refundId()));
+	}
+
+	private record AttemptEntry(String operation, String outcome, Instant attemptedAt) {
 	}
 
 	private void PG_환불_타임아웃_준비(JobTarget target) {

@@ -36,7 +36,7 @@ class ReturnloopApplicationTests {
 
 	@Test
 	void 마이그레이션은_한_번만_적용된다() {
-		assertEquals("4", flyway.info().current().getVersion().getVersion());
+		assertEquals("5", flyway.info().current().getVersion().getVersion());
 		assertEquals(0, flyway.migrate().migrationsExecuted);
 		assertEquals(1, jdbc.queryForObject(
 				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '1' AND success = 1", Integer.class));

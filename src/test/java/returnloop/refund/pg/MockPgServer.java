@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -23,8 +24,10 @@ final class MockPgServer implements AutoCloseable {
 	private final AtomicInteger executions = new AtomicInteger();
 	private final AtomicInteger refundRequests = new AtomicInteger();
 	private final AtomicInteger queries = new AtomicInteger();
+	private final AtomicBoolean delayNextRefund = new AtomicBoolean();
 	private final CountDownLatch releaseResponse = new CountDownLatch(1);
 	private volatile String delayedKey;
+	private volatile String lastQueryKey;
 
 	MockPgServer() throws IOException {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -39,6 +42,10 @@ final class MockPgServer implements AutoCloseable {
 
 	void 응답을_보류한다(String key) {
 		delayedKey = key;
+	}
+
+	void 다음_환불_응답을_보류한다() {
+		delayNextRefund.set(true);
 	}
 
 	void 응답_보류를_해제한다() {
@@ -61,6 +68,10 @@ final class MockPgServer implements AutoCloseable {
 		return queries.get();
 	}
 
+	String 마지막_조회_키() {
+		return lastQueryKey;
+	}
+
 	private void 처리한다(HttpExchange exchange) throws IOException {
 		try (exchange) {
 			String path = exchange.getRequestURI().getPath();
@@ -69,6 +80,7 @@ final class MockPgServer implements AutoCloseable {
 			} else if ("GET".equals(exchange.getRequestMethod()) && path.startsWith("/refunds/")) {
 				queries.incrementAndGet();
 				String key = path.substring("/refunds/".length());
+				lastQueryKey = key;
 				if (refunds.containsKey(key)) {
 					성공을_응답한다(exchange);
 				} else {
@@ -97,7 +109,7 @@ final class MockPgServer implements AutoCloseable {
 			exchange.sendResponseHeaders(409, -1);
 			return;
 		}
-		if (key.equals(delayedKey)) {
+		if (key.equals(delayedKey) || delayNextRefund.getAndSet(false)) {
 			try {
 				releaseResponse.await(10, TimeUnit.SECONDS);
 			} catch (InterruptedException exception) {
