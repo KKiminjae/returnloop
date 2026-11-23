@@ -19,5 +19,9 @@ public interface RefundGateway {
 		public TimeoutException(String message) {
 			super(message);
 		}
+
+		public TimeoutException(String message, Throwable cause) {
+			super(message, cause);
+		}
 	}
 }
