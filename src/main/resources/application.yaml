@@ -4,3 +4,9 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
+
+returnloop:
+  refund:
+    worker:
+      enabled: false
+      pg-timeout: 1s

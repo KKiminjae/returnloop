@@ -69,6 +69,7 @@ class RefundConcurrencyTests {
 	@BeforeEach
 	void 테스트_DB를_정리한다() {
 		new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+			jdbc.update("DELETE FROM refund_job");
 			jdbc.update("DELETE FROM refund");
 			jdbc.update("DELETE FROM payment");
 		});
@@ -200,6 +201,8 @@ class RefundConcurrencyTests {
 		new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
 			assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM refund WHERE payment_id = ?", Integer.class, paymentId));
 			assertEquals(results.getFirst().id(), jdbc.queryForObject("SELECT id FROM refund WHERE payment_id = ?", Long.class, paymentId));
+			assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM refund_job WHERE refund_id = ?",
+					Integer.class, results.getFirst().id()));
 			assertEquals("PAID", jdbc.queryForObject("SELECT status FROM payment WHERE id = ?", String.class, paymentId));
 		});
 	}
