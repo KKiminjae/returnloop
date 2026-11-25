@@ -108,7 +108,10 @@ class RefundWorkerIntegrationTests {
 
 			assertTrue(error.getMostSpecificCause().getMessage().contains("ck_test_reject_job_completion"));
 			verify(gateway).refund(target.paymentId(), 15000L, target.key());
-			저장_상태_확인(target, "PENDING", "PAID", "PENDING");
+			저장_상태_확인(target, "PENDING", "PAID", "PROCESSING");
+			assertEquals(1, jdbc.queryForObject("""
+					SELECT COUNT(*) FROM refund_job WHERE id = ? AND lease_expires_at IS NOT NULL
+					""", Integer.class, target.jobId()));
 			이력_확인(target);
 		} finally {
 			jdbc.execute("ALTER TABLE refund_job DROP CHECK ck_test_reject_job_completion");

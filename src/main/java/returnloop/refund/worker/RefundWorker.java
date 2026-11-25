@@ -1,6 +1,7 @@
 package returnloop.refund.worker;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -12,6 +13,7 @@ import returnloop.refund.pg.RefundGateway.Result;
 import returnloop.refund.pg.RefundGateway.TimeoutException;
 import returnloop.refund.worker.RefundWorkerTransactionService.RefundRequest;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,16 +22,19 @@ public class RefundWorker {
 	private final RefundWorkerTransactionService transactions;
 	private final RefundGateway gateway;
 	private final Clock clock;
+	private final Duration leaseDuration;
 
-	public RefundWorker(RefundWorkerTransactionService transactions, RefundGateway gateway, Clock clock) {
+	public RefundWorker(RefundWorkerTransactionService transactions, RefundGateway gateway, Clock clock,
+			@Value("${returnloop.refund.worker.pg-timeout}") Duration pgTimeout) {
 		this.transactions = transactions;
 		this.gateway = gateway;
 		this.clock = clock;
+		this.leaseDuration = pgTimeout.plusSeconds(5);
 	}
 
 	@Transactional(propagation = Propagation.NOT_SUPPORTED)
 	public void process(long jobId) {
-		Optional<RefundRequest> request = transactions.findPendingRequest(jobId, clock.instant());
+		Optional<RefundRequest> request = transactions.claimRequest(jobId, clock.instant(), leaseDuration);
 		if (request.isEmpty()) {
 			return;
 		}

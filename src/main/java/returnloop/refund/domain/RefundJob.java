@@ -45,6 +45,9 @@ public class RefundJob {
 	@Column(name = "next_run_at")
 	private Instant nextRunAt;
 
+	@Column(name = "lease_expires_at")
+	private Instant leaseExpiresAt;
+
 	protected RefundJob() {
 	}
 
@@ -66,16 +69,35 @@ public class RefundJob {
 		return status == Status.PENDING && (nextRunAt == null || !now.isBefore(nextRunAt));
 	}
 
-	public boolean isPending(Operation expectedOperation) {
-		return status == Status.PENDING && operation == expectedOperation;
+	public boolean hasExpiredLease(Instant now) {
+		return status == Status.PROCESSING && !now.isBefore(leaseExpiresAt);
+	}
+
+	public void claim(Instant expiresAt) {
+		status = Status.PROCESSING;
+		leaseExpiresAt = expiresAt;
+		nextRunAt = null;
+	}
+
+	public void recoverAsQuery() {
+		operation = Operation.QUERY_PG;
+		refund.markUnknown();
+	}
+
+	public boolean isProcessing(Operation expectedOperation) {
+		return status == Status.PROCESSING && operation == expectedOperation;
 	}
 
 	public void scheduleQuery(Instant now) {
+		status = Status.PENDING;
+		leaseExpiresAt = null;
 		operation = Operation.QUERY_PG;
 		nextRunAt = now;
 	}
 
 	public void recordUnresolvedQuery(Instant now) {
+		status = Status.PENDING;
+		leaseExpiresAt = null;
 		queryCount++;
 		switch (queryCount) {
 			case 1 -> nextRunAt = now.plusSeconds(5);
@@ -93,6 +115,7 @@ public class RefundJob {
 			queryCount++;
 		}
 		status = Status.COMPLETED;
+		leaseExpiresAt = null;
 		nextRunAt = null;
 	}
 
@@ -101,6 +124,6 @@ public class RefundJob {
 	}
 
 	private enum Status {
-		PENDING, COMPLETED, NEEDS_REVIEW
+		PENDING, PROCESSING, COMPLETED, NEEDS_REVIEW
 	}
 }

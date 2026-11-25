@@ -1,5 +1,6 @@
 package returnloop.refund.worker;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -27,19 +28,26 @@ public class RefundWorkerTransactionService {
 		this.attemptRepository = attemptRepository;
 	}
 
-	@Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
-	public Optional<RefundRequest> findPendingRequest(long jobId, Instant now) {
-		return jobRepository.findById(jobId).filter(job -> job.isReady(now)).map(job -> {
+	@Transactional(propagation = Propagation.REQUIRES_NEW)
+	public Optional<RefundRequest> claimRequest(long jobId, Instant now, Duration leaseDuration) {
+		return jobRepository.findById(jobId).flatMap(job -> {
+			if (job.hasExpiredLease(now)) {
+				job.recoverAsQuery();
+			} else if (!job.isReady(now)) {
+				return Optional.empty();
+			}
+
+			job.claim(now.plus(leaseDuration));
 			Refund refund = job.getRefund();
-			return new RefundRequest(job.getOperation(), refund.getPayment().getId(),
-					refund.getAmount(), refund.getIdempotencyKey());
+			return Optional.of(new RefundRequest(job.getOperation(), refund.getPayment().getId(),
+					refund.getAmount(), refund.getIdempotencyKey()));
 		});
 	}
 
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public void complete(long jobId, Operation operation, Result result, Instant attemptedAt) {
 		RefundJob job = jobRepository.findById(jobId).orElseThrow();
-		if (job.isPending(operation)) {
+		if (job.isProcessing(operation)) {
 			Refund refund = job.getRefund();
 			switch (result) {
 				case SUCCEEDED -> {
@@ -57,7 +65,7 @@ public class RefundWorkerTransactionService {
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public void scheduleQuery(long jobId, Instant attemptedAt, Instant now) {
 		RefundJob job = jobRepository.findById(jobId).orElseThrow();
-		if (job.isPending(Operation.EXECUTE_REFUND)) {
+		if (job.isProcessing(Operation.EXECUTE_REFUND)) {
 			job.getRefund().markUnknown();
 			job.scheduleQuery(now);
 			attemptRepository.save(new RefundAttempt(job.getRefund(), Operation.EXECUTE_REFUND, Outcome.TIMEOUT, attemptedAt));
@@ -67,7 +75,7 @@ public class RefundWorkerTransactionService {
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public void recordUnresolvedQuery(long jobId, Outcome outcome, Instant attemptedAt, Instant now) {
 		RefundJob job = jobRepository.findById(jobId).orElseThrow();
-		if (job.isPending(Operation.QUERY_PG)) {
+		if (job.isProcessing(Operation.QUERY_PG)) {
 			job.recordUnresolvedQuery(now);
 			attemptRepository.save(new RefundAttempt(job.getRefund(), Operation.QUERY_PG, outcome, attemptedAt));
 		}

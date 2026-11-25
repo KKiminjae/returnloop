@@ -1,6 +1,6 @@
 # ReturnLoop 핵심 설계
 
-E01은 Payment / Refund 스키마, DB 제약, 엔티티, Repository, 환불 생성 Service와 API를 포함한다. E02~E04에는 후속 설계 방향을 기록한다.
+E01은 환불 생성과 중복 방지, E02는 PG 응답 유실, E03은 Worker 비정상 종료 후 복구를 다룬다. E04에는 대사 설계 방향을 기록한다.
 관측 결과는 [스키마 Evidence](evidence/E01-01-schema.md)와
 [엔티티 Evidence](evidence/E01-02-entities.md), [Service Evidence](evidence/E01-03-service.md)에 기록한다.
 
@@ -67,14 +67,23 @@ PENDING Job을 ID 오름차순으로 최대 20개 조회한다. 각 Job을 순�
 `returnloop.refund.worker.pg-base-url`에 PG 주소를 지정한다.
 `returnloop.refund.worker.pg-timeout`의 기본값은 1초다.
 
-이 단계는 Worker가 계속 실행되는 조건에서의 응답 유실 복구를 검증한다.
-비정상 종료 후 자동 복구는 보장하지 않는다.
+E02는 Worker가 계속 실행되는 조건에서의 응답 유실 복구를 다룬다.
 
 ## E03 — 비정상 종료 후 복구
 
-E02의 영속 작업을 확장하여 점유 만료와 재시작 복구를 검증한다. 점유 만료는 PG 실패를
-뜻하지 않는다. 재개 시 기존 PG 결과를 우선 확인하며 상세 점유 규칙은 구현 전에 결정한다.
-다중 Worker는 초기 범위에 포함하지 않는다.
+Worker는 PG 호출 전에 별도 트랜잭션에서 Job을 PROCESSING으로 변경하고
+`refund_job.lease_expires_at`을 저장한다. 점유 기간은 PG 타임아웃에 5초를 더한 값이다.
+MySQL CHECK 제약으로 PROCESSING 상태에서만 만료 시각을 갖도록 한다.
+
+스케줄러는 실행 가능한 PENDING Job과 만료 시각에 도달한 PROCESSING Job을 조회한다.
+만료된 Job을 다시 점유할 때 Refund를 UNKNOWN으로 바꾸고 기존 멱등 키의 PG 결과를 조회한다.
+종료 시점에 POST가 PG에 도달했는지 구분할 수 없어 만료된 작업은 일관되게 조회부터 시작한다.
+PG에서 거래 없음이나 조회 불가가 돌아오면 기존 재시도 간격과 횟수를 적용하고,
+세 번째 미확정 조회 결과를 저장하면 NEEDS_REVIEW로 전환한다.
+
+PG 결과, 호출 이력 및 점유 해제는 같은 트랜잭션에서 반영한다.
+결과 트랜잭션이 커밋되기 전에 종료된 조회는 조회 횟수와 이력에 포함되지 않는다.
+점유는 단일 Worker의 재시작 복구에 사용하며, 다중 Worker 간 동시 점유는 범위에서 제외한다.
 
 ## E04 — 내부 상태와 PG 기록 대사
 

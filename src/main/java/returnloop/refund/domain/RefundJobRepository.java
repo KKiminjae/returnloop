@@ -11,7 +11,8 @@ public interface RefundJobRepository extends JpaRepository<RefundJob, Long> {
 
 	@Query(value = """
 			SELECT id FROM refund_job
-			WHERE status = 'PENDING' AND (next_run_at IS NULL OR next_run_at <= :now)
+			WHERE (status = 'PENDING' AND (next_run_at IS NULL OR next_run_at <= :now))
+			   OR (status = 'PROCESSING' AND lease_expires_at <= :now)
 			ORDER BY id
 			LIMIT 20
 			""", nativeQuery = true)
