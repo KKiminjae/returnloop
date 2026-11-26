@@ -48,6 +48,9 @@ public class RefundJob {
 	@Column(name = "lease_expires_at")
 	private Instant leaseExpiresAt;
 
+	@Column(name = "lease_token", length = 36)
+	private String leaseToken;
+
 	protected RefundJob() {
 	}
 
@@ -73,9 +76,10 @@ public class RefundJob {
 		return status == Status.PROCESSING && !now.isBefore(leaseExpiresAt);
 	}
 
-	public void claim(Instant expiresAt) {
+	public void claim(Instant expiresAt, String token) {
 		status = Status.PROCESSING;
 		leaseExpiresAt = expiresAt;
+		leaseToken = token;
 		nextRunAt = null;
 	}
 
@@ -84,13 +88,14 @@ public class RefundJob {
 		refund.markUnknown();
 	}
 
-	public boolean isProcessing(Operation expectedOperation) {
-		return status == Status.PROCESSING && operation == expectedOperation;
+	public boolean ownsLease(Operation expectedOperation, String token) {
+		return status == Status.PROCESSING && operation == expectedOperation && leaseToken.equals(token);
 	}
 
 	public void scheduleQuery(Instant now) {
 		status = Status.PENDING;
 		leaseExpiresAt = null;
+		leaseToken = null;
 		operation = Operation.QUERY_PG;
 		nextRunAt = now;
 	}
@@ -98,6 +103,7 @@ public class RefundJob {
 	public void recordUnresolvedQuery(Instant now) {
 		status = Status.PENDING;
 		leaseExpiresAt = null;
+		leaseToken = null;
 		queryCount++;
 		switch (queryCount) {
 			case 1 -> nextRunAt = now.plusSeconds(5);
@@ -116,6 +122,7 @@ public class RefundJob {
 		}
 		status = Status.COMPLETED;
 		leaseExpiresAt = null;
+		leaseToken = null;
 		nextRunAt = null;
 	}
 

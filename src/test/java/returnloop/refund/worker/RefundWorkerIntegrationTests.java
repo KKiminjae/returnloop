@@ -1,13 +1,19 @@
 package returnloop.refund.worker;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import returnloop.payment.domain.Payment;
 import returnloop.payment.domain.PaymentRepository;
+import returnloop.refund.domain.RefundAttempt.Outcome;
+import returnloop.refund.domain.RefundJob.Operation;
 import returnloop.refund.dto.RefundResult;
 import returnloop.refund.pg.RefundGateway;
 import returnloop.refund.pg.RefundGateway.QueryResult;
@@ -52,6 +58,9 @@ class RefundWorkerIntegrationTests {
 	RefundWorker worker;
 
 	@Autowired
+	RefundWorkerTransactionService transactions;
+
+	@Autowired
 	PaymentRepository paymentRepository;
 
 	@Autowired
@@ -92,6 +101,60 @@ class RefundWorkerIntegrationTests {
 		verify(gateway, times(1)).refund(target.paymentId(), 15000L, target.key());
 		저장_상태_확인(target, "SUCCEEDED", "REFUNDED", "COMPLETED");
 		이력_확인(target, new AttemptEntry("EXECUTE_REFUND", "SUCCEEDED", INITIAL_TIME));
+	}
+
+	@Test
+	void 두_작업자가_같은_작업을_동시에_처리해도_PG_환불은_한_번만_호출한다() throws Exception {
+		JobTarget target = 작업_준비();
+		PG_성공_응답_준비(target);
+		CyclicBarrier start = new CyclicBarrier(2);
+		try (var executor = Executors.newFixedThreadPool(2)) {
+			var first = executor.submit(() -> {
+				start.await(5, TimeUnit.SECONDS);
+				worker.process(target.jobId());
+				return null;
+			});
+			var second = executor.submit(() -> {
+				start.await(5, TimeUnit.SECONDS);
+				worker.process(target.jobId());
+				return null;
+			});
+			first.get(10, TimeUnit.SECONDS);
+			second.get(10, TimeUnit.SECONDS);
+		}
+
+		verify(gateway, times(1)).refund(target.paymentId(), 15000L, target.key());
+		verifyNoMoreInteractions(gateway);
+		저장_상태_확인(target, "SUCCEEDED", "REFUNDED", "COMPLETED");
+		이력_확인(target, new AttemptEntry("EXECUTE_REFUND", "SUCCEEDED", INITIAL_TIME));
+	}
+
+	@Test
+	void 같은_조회_작업을_다시_점유하면_이전_토큰의_결과를_저장할_수_없다() {
+		JobTarget target = 작업_준비();
+		PG_환불_타임아웃_준비(target);
+		worker.process(target.jobId());
+		Duration lease = Duration.ofSeconds(6);
+		var previous = transactions.claimRequest(target.jobId(), clock, lease).orElseThrow();
+		when(clock.instant()).thenReturn(INITIAL_TIME.plus(lease));
+		var current = transactions.claimRequest(target.jobId(), clock, lease).orElseThrow();
+
+		assertEquals(Operation.QUERY_PG, previous.operation());
+		assertEquals(previous.operation(), current.operation());
+		assertNotEquals(previous.leaseToken(), current.leaseToken());
+		transactions.complete(target.jobId(), previous.leaseToken(), Operation.QUERY_PG,
+				RefundGateway.Result.FAILED, clock.instant());
+		transactions.recordUnresolvedQuery(target.jobId(), previous.leaseToken(),
+				Outcome.NOT_FOUND, clock.instant(), clock.instant());
+		저장_상태_확인(target, "UNKNOWN", "PAID", "PROCESSING");
+		조회_일정_확인(target.jobId(), 0, null);
+		이력_확인(target, new AttemptEntry("EXECUTE_REFUND", "TIMEOUT", INITIAL_TIME));
+
+		transactions.complete(target.jobId(), current.leaseToken(), Operation.QUERY_PG,
+				RefundGateway.Result.SUCCEEDED, clock.instant());
+		저장_상태_확인(target, "SUCCEEDED", "REFUNDED", "COMPLETED");
+		이력_확인(target, new AttemptEntry("EXECUTE_REFUND", "TIMEOUT", INITIAL_TIME),
+				new AttemptEntry("QUERY_PG", "SUCCEEDED", INITIAL_TIME.plus(lease)));
 	}
 
 	@Test

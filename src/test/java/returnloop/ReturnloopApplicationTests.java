@@ -36,7 +36,7 @@ class ReturnloopApplicationTests {
 
 	@Test
 	void 마이그레이션은_한_번만_적용된다() {
-		assertEquals("6", flyway.info().current().getVersion().getVersion());
+		assertEquals("7", flyway.info().current().getVersion().getVersion());
 		assertEquals(0, flyway.migrate().migrationsExecuted);
 		assertEquals(1, jdbc.queryForObject(
 				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '1' AND success = 1", Integer.class));
@@ -50,6 +50,8 @@ class ReturnloopApplicationTests {
 				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '5' AND success = 1", Integer.class));
 		assertEquals(1, jdbc.queryForObject(
 				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '6' AND success = 1", Integer.class));
+		assertEquals(1, jdbc.queryForObject(
+				"SELECT COUNT(*) FROM flyway_schema_history WHERE version = '7' AND success = 1", Integer.class));
 	}
 
 	@Test
@@ -57,11 +59,24 @@ class ReturnloopApplicationTests {
 		환불_저장(결제_저장(), 15000L, "PENDING", UUID.randomUUID().toString());
 		long refundId = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
 		제약_위반_검증(3819, "ck_refund_job_lease",
-				() -> jdbc.update("INSERT INTO refund_job (refund_id, status) VALUES (?, 'PROCESSING')", refundId));
+				() -> jdbc.update("""
+						INSERT INTO refund_job (refund_id, status, lease_token)
+						VALUES (?, 'PROCESSING', UUID())
+						""", refundId));
 		제약_위반_검증(3819, "ck_refund_job_lease",
 				() -> jdbc.update("""
 						INSERT INTO refund_job (refund_id, status, lease_expires_at)
 						VALUES (?, 'PENDING', CURRENT_TIMESTAMP(6))
+						""", refundId));
+		제약_위반_검증(3819, "ck_refund_job_lease_token",
+				() -> jdbc.update("""
+						INSERT INTO refund_job (refund_id, status, lease_expires_at)
+						VALUES (?, 'PROCESSING', CURRENT_TIMESTAMP(6))
+						""", refundId));
+		제약_위반_검증(3819, "ck_refund_job_lease_token",
+				() -> jdbc.update("""
+						INSERT INTO refund_job (refund_id, status, lease_token)
+						VALUES (?, 'PENDING', UUID())
 						""", refundId));
 	}
 
