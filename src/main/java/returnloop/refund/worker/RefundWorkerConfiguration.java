@@ -27,8 +27,9 @@ class RefundWorkerConfiguration {
 	}
 
 	@Bean
-	RefundWorker refundWorker(RefundWorkerTransactionService transactions, RefundGateway gateway) {
-		return new RefundWorker(transactions, gateway, Clock.systemUTC());
+	RefundWorker refundWorker(RefundWorkerTransactionService transactions, RefundGateway gateway,
+			@Value("${returnloop.refund.worker.pg-timeout}") Duration timeout) {
+		return new RefundWorker(transactions, gateway, Clock.systemUTC(), timeout);
 	}
 
 	@Bean
