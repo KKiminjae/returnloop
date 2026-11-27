@@ -103,8 +103,11 @@ PG 주소와 타임아웃은 Worker와 공유한다.
 
 PG 조회는 트랜잭션 밖에서 수행한다. 결과를 반영할 때 Job 행을 잠그고 현재 상태를
 재확인한다. Refund가 UNKNOWN이고 Job이 NEEDS_REVIEW이며 Payment가 PAID인 상태에서
-PG 성공과 결제 ID·금액·멱등 키가 모두 일치하면 Refund와 Payment를 성공 상태로 변경하고,
-Job 완료 및 RECONCILE 성공 이력을 같은 트랜잭션에 저장한다. Worker의 조회 횟수는 유지한다.
+PG 원장의 최종 결과와 일치하는 거래 정보(결제 ID·금액·멱등 키)를 확인하면 환불 결과를
+확정한다. PG 성공이면 Refund를 SUCCEEDED, Payment를 REFUNDED로 변경한다.
+PG 최종 실패이면 Refund를 FAILED로 변경하고 Payment는 PAID로 유지한다.
+두 경우 모두 Job 완료와 RECONCILE 결과 이력을 같은 트랜잭션에 저장하며 Worker의 조회 횟수는 유지한다.
+같은 결제로 다시 환불을 요청하면 기존 FAILED 내역을 반환한다.
 
 확정 상태 충돌, 거래 정보 불일치, 복구 조건에서의 Payment 상태 충돌과 내부 성공 건의
 PG 거래 없음은 조사 기록에 남긴다. 환불 ID와 불일치 유형별로 한 행을 유지하고 최초·최근

@@ -58,6 +58,10 @@ final class MockPgServer implements AutoCloseable {
 		return refunds.containsKey(key);
 	}
 
+	void 환불_실패를_기록한다(long paymentId, long amount, String key) {
+		refunds.put(key, new RefundLedger.LedgerResult(RefundGateway.QueryResult.FAILED, paymentId, amount, key));
+	}
+
 	int 환불_실행_횟수() {
 		return executions.get();
 	}

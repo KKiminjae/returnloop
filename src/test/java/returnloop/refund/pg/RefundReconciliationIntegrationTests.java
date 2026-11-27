@@ -92,6 +92,36 @@ class RefundReconciliationIntegrationTests {
 	}
 
 	@Test
+	void 일치하는_PG_최종_실패를_확정하고_재요청에는_기존_환불을_반환한다() throws Exception {
+		try (var server = new MockPgServer()) {
+			var gateway = new HttpRefundGateway(server.주소(), Duration.ofSeconds(2));
+			var target = 환불을_준비한다("UNKNOWN", "NEEDS_REVIEW", "PAID");
+			var mismatch = 환불을_준비한다("UNKNOWN", "NEEDS_REVIEW", "PAID");
+			server.환불_실패를_기록한다(target.paymentId(), 15000, target.key());
+			server.환불_실패를_기록한다(mismatch.paymentId(), 10000, mismatch.key());
+
+			대사를_실행한다(gateway, START);
+			대사를_실행한다(gateway, START.plusSeconds(60));
+
+			var repeated = refunds.createRefund(target.paymentId());
+			assertEquals(target.refundId(), repeated.id());
+			assertEquals(0, server.환불_요청_횟수());
+			assertEquals(1, jdbc.queryForObject("""
+					SELECT COUNT(*) FROM refund r JOIN payment p ON p.id = r.payment_id
+					JOIN refund_job j ON j.refund_id = r.id JOIN refund_attempt a ON a.refund_id = r.id
+					WHERE r.id = ? AND r.status = 'FAILED' AND p.status = 'PAID' AND j.status = 'COMPLETED'
+					  AND j.query_count = 3 AND a.operation = 'RECONCILE' AND a.outcome = 'FAILED'
+					""", Integer.class, target.refundId()));
+			assertEquals(1, jdbc.queryForObject("""
+					SELECT COUNT(*) FROM refund r JOIN refund_job j ON j.refund_id = r.id
+					JOIN refund_reconciliation_issue i ON i.refund_id = r.id
+					WHERE r.id = ? AND r.status = 'UNKNOWN' AND j.status = 'NEEDS_REVIEW'
+					  AND i.mismatch_type = 'AMOUNT_MISMATCH'
+					""", Integer.class, mismatch.refundId()));
+		}
+	}
+
+	@Test
 	void 확정_상태와_금액_충돌을_기록하고_반복_탐지는_같은_행을_갱신한다() throws Exception {
 		try (var server = new MockPgServer()) {
 			var gateway = new HttpRefundGateway(server.주소(), Duration.ofSeconds(2));

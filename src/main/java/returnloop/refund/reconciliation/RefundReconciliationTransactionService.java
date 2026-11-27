@@ -67,16 +67,23 @@ public class RefundReconciliationTransactionService {
 		if ((status == RefundStatus.SUCCEEDED && !pgSucceeded) || (status == RefundStatus.FAILED && pgSucceeded)) {
 			recordIssue(refund, record, "STATUS_CONFLICT", observedAt);
 		}
-		if (job.needsReview() && status == RefundStatus.UNKNOWN && pgSucceeded
+		if (job.needsReview() && status == RefundStatus.UNKNOWN
 				&& paymentMatches && amountMatches && keyMatches) {
 			if (refund.getPayment().getStatus() != PaymentStatus.PAID) {
 				recordIssue(refund, record, "PAYMENT_STATUS_CONFLICT", observedAt);
 				return;
 			}
-			refund.markSucceeded();
-			refund.getPayment().markRefunded();
+			Outcome outcome;
+			if (pgSucceeded) {
+				refund.markSucceeded();
+				refund.getPayment().markRefunded();
+				outcome = Outcome.SUCCEEDED;
+			} else {
+				refund.markFailed();
+				outcome = Outcome.FAILED;
+			}
 			job.completeAfterReconciliation();
-			attempts.save(new RefundAttempt(refund, Operation.RECONCILE, Outcome.SUCCEEDED, observedAt));
+			attempts.save(new RefundAttempt(refund, Operation.RECONCILE, outcome, observedAt));
 		}
 	}
 
