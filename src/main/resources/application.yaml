@@ -10,3 +10,6 @@ returnloop:
     worker:
       enabled: false
       pg-timeout: 1s
+    reconciliation:
+      enabled: false
+      interval: 5m

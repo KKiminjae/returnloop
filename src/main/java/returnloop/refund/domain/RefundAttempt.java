@@ -15,7 +15,6 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
-import returnloop.refund.domain.RefundJob.Operation;
 
 @Entity
 @Table(name = "refund_attempt")
@@ -45,11 +44,22 @@ public class RefundAttempt {
 	protected RefundAttempt() {
 	}
 
+	public RefundAttempt(Refund refund, RefundJob.Operation operation, Outcome outcome, Instant attemptedAt) {
+		this(refund, switch (operation) {
+			case EXECUTE_REFUND -> Operation.EXECUTE_REFUND;
+			case QUERY_PG -> Operation.QUERY_PG;
+		}, outcome, attemptedAt);
+	}
+
 	public RefundAttempt(Refund refund, Operation operation, Outcome outcome, Instant attemptedAt) {
 		this.refund = refund;
 		this.operation = operation;
 		this.outcome = outcome;
 		this.attemptedAt = attemptedAt;
+	}
+
+	public enum Operation {
+		EXECUTE_REFUND, QUERY_PG, RECONCILE
 	}
 
 	public enum Outcome {

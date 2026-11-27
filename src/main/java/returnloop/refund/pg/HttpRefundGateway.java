@@ -3,6 +3,7 @@ package returnloop.refund.pg;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.function.Function;
 
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -11,7 +12,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
-public class HttpRefundGateway implements RefundGateway {
+public class HttpRefundGateway implements RefundGateway, RefundLedger {
 
 	private final RestClient client;
 
@@ -46,25 +47,44 @@ public class HttpRefundGateway implements RefundGateway {
 
 	@Override
 	public QueryResult query(String idempotencyKey) {
+		return query(idempotencyKey, MediaType.TEXT_PLAIN, response -> QueryResult.valueOf(response.body(String.class)),
+				QueryResult.NOT_FOUND, QueryResult.UNAVAILABLE);
+	}
+
+	@Override
+	public LedgerResult queryLedger(String idempotencyKey) {
+		return query(idempotencyKey, MediaType.APPLICATION_JSON, response -> {
+			LedgerResult record = response.body(LedgerResult.class);
+			if (record == null || (record.status() != QueryResult.SUCCEEDED && record.status() != QueryResult.FAILED)
+					|| record.paymentId() == null || record.amount() == null || record.idempotencyKey() == null) {
+				throw new IllegalStateException("Invalid PG ledger record");
+			}
+			return record;
+		}, new LedgerResult(QueryResult.NOT_FOUND, null, null, null),
+				new LedgerResult(QueryResult.UNAVAILABLE, null, null, null));
+	}
+
+	private <T> T query(String idempotencyKey, MediaType mediaType,
+			Function<RestClient.ResponseSpec, T> readBody, T notFound, T unavailable) {
 		try {
-			String status = client.get()
+			var response = client.get()
 					.uri("/refunds/{idempotencyKey}", idempotencyKey)
-					.retrieve()
-					.body(String.class);
-			return QueryResult.valueOf(status);
+					.accept(mediaType)
+					.retrieve();
+			return readBody.apply(response);
 		} catch (ResourceAccessException exception) {
-			return QueryResult.UNAVAILABLE;
+			return unavailable;
 		} catch (RestClientResponseException exception) {
 			if (exception.getStatusCode().value() == 404) {
-				return QueryResult.NOT_FOUND;
+				return notFound;
 			}
 			if (exception.getStatusCode().is5xxServerError()) {
-				return QueryResult.UNAVAILABLE;
+				return unavailable;
 			}
 			throw exception;
 		} catch (RestClientException exception) {
 			if (exception.getMostSpecificCause() instanceof SocketTimeoutException) {
-				return QueryResult.UNAVAILABLE;
+				return unavailable;
 			}
 			throw exception;
 		}

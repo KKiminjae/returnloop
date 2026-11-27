@@ -15,12 +15,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import tools.jackson.databind.json.JsonMapper;
 
 final class MockPgServer implements AutoCloseable {
 
 	private final HttpServer server;
 	private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-	private final Map<String, String> refunds = new ConcurrentHashMap<>();
+	private final JsonMapper json = JsonMapper.shared();
+	private final Map<String, RefundLedger.LedgerResult> refunds = new ConcurrentHashMap<>();
 	private final AtomicInteger executions = new AtomicInteger();
 	private final AtomicInteger refundRequests = new AtomicInteger();
 	private final AtomicInteger queries = new AtomicInteger();
@@ -81,10 +83,13 @@ final class MockPgServer implements AutoCloseable {
 				queries.incrementAndGet();
 				String key = path.substring("/refunds/".length());
 				lastQueryKey = key;
-				if (refunds.containsKey(key)) {
-					성공을_응답한다(exchange);
-				} else {
+				var record = refunds.get(key);
+				if (record == null) {
 					exchange.sendResponseHeaders(404, -1);
+				} else if ("application/json".equals(exchange.getRequestHeaders().getFirst("Accept"))) {
+					응답한다(exchange, json.writeValueAsString(record), "application/json");
+				} else {
+					응답한다(exchange, record.status().name(), "text/plain");
 				}
 			} else {
 				exchange.sendResponseHeaders(501, -1);
@@ -100,12 +105,14 @@ final class MockPgServer implements AutoCloseable {
 			return;
 		}
 
-		String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-		String recordedRequest = refunds.computeIfAbsent(key, ignored -> {
+		var request = json.readValue(exchange.getRequestBody(), RefundRequest.class);
+		var record = new RefundLedger.LedgerResult(RefundGateway.QueryResult.SUCCEEDED,
+				request.paymentId(), request.amount(), key);
+		var recordedRequest = refunds.computeIfAbsent(key, ignored -> {
 			executions.incrementAndGet();
-			return request;
+			return record;
 		});
-		if (!recordedRequest.equals(request)) {
+		if (!recordedRequest.equals(record)) {
 			exchange.sendResponseHeaders(409, -1);
 			return;
 		}
@@ -121,10 +128,17 @@ final class MockPgServer implements AutoCloseable {
 	}
 
 	private void 성공을_응답한다(HttpExchange exchange) throws IOException {
-		byte[] body = "SUCCEEDED".getBytes(StandardCharsets.UTF_8);
-		exchange.getResponseHeaders().set("Content-Type", "text/plain");
+		응답한다(exchange, "SUCCEEDED", "text/plain");
+	}
+
+	private void 응답한다(HttpExchange exchange, String value, String contentType) throws IOException {
+		byte[] body = value.getBytes(StandardCharsets.UTF_8);
+		exchange.getResponseHeaders().set("Content-Type", contentType);
 		exchange.sendResponseHeaders(200, body.length);
 		exchange.getResponseBody().write(body);
+	}
+
+	private record RefundRequest(long paymentId, long amount) {
 	}
 
 	@Override

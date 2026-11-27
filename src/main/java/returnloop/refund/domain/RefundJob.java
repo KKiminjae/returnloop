@@ -116,10 +116,29 @@ public class RefundJob {
 		}
 	}
 
+	public boolean needsReview() {
+		return status == Status.NEEDS_REVIEW;
+	}
+
+	public boolean isCompleted() {
+		return status == Status.COMPLETED;
+	}
+
+	public void completeAfterReconciliation() {
+		if (!needsReview()) {
+			throw new IllegalStateException("Refund job does not need review");
+		}
+		markCompleted();
+	}
+
 	public void complete() {
 		if (operation == Operation.QUERY_PG) {
 			queryCount++;
 		}
+		markCompleted();
+	}
+
+	private void markCompleted() {
 		status = Status.COMPLETED;
 		leaseExpiresAt = null;
 		leaseToken = null;

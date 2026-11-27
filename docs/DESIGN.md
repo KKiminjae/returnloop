@@ -94,12 +94,22 @@ PG 결과, 호출 이력 및 점유 해제는 같은 트랜잭션에서 반영�
 
 ## E04 — 내부 상태와 PG 기록 대사
 
-상태뿐 아니라 결제 ID, 금액, 멱등 키도 비교한다. 확정 상태와 PG 기록이 충돌하면
-Payment / Refund를 자동 변경하거나 UNKNOWN으로 되돌리지 않고 별도 조사 기록을 남긴다.
-이는 내부 상태가 옳다고 인정한다는 의미가 아니다. 탐지만으로 추가 환불을 보내지 않는다.
+대사는 내부 환불을 기준으로 PG 원장을 조회한다. 실행 시작 시 최대 Job ID를 읽고,
+그 범위의 COMPLETED 및 NEEDS_REVIEW Job을 ID 오름차순으로 20건씩 읽어 한 번의
+실행에서 처리한다. 마지막으로 읽은 ID 이후부터 다음 페이지를 조회한다.
+`returnloop.refund.reconciliation.enabled`의 기본값은 false다. 활성화하면 대사 전용
+스케줄러에서 실행하며, `returnloop.refund.reconciliation.interval`의 기본값은 실행 완료 후 5분이다.
+PG 주소와 타임아웃은 Worker와 공유한다.
 
-확정된 FAILED 이후 재신청·자동 및 수동 재처리는 MVP에서 지원하지 않는다.
-API 재요청은 기존 FAILED를 반환한다. 자동 복구의 세부 조건과 조사 기록 구조는 E04 전에 결정한다.
+PG 조회는 트랜잭션 밖에서 수행한다. 결과를 반영할 때 Job 행을 잠그고 현재 상태를
+재확인한다. Refund가 UNKNOWN이고 Job이 NEEDS_REVIEW이며 Payment가 PAID인 상태에서
+PG 성공과 결제 ID·금액·멱등 키가 모두 일치하면 Refund와 Payment를 성공 상태로 변경하고,
+Job 완료 및 RECONCILE 성공 이력을 같은 트랜잭션에 저장한다. Worker의 조회 횟수는 유지한다.
+
+확정 상태 충돌, 거래 정보 불일치, 복구 조건에서의 Payment 상태 충돌과 내부 성공 건의
+PG 거래 없음은 조사 기록에 남긴다. 환불 ID와 불일치 유형별로 한 행을 유지하고 최초·최근
+탐지 시각과 최근 관측값을 저장한다. NEEDS_REVIEW의 거래 없음과 조회 불가는 다음 주기에
+다시 확인한다. 확정된 FAILED는 상태를 보존하며, 대사 과정에서는 PG 조회만 수행한다.
 
 ## 기록 원칙
 

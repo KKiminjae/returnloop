@@ -13,6 +13,25 @@ import org.springframework.data.repository.query.Param;
 
 public interface RefundJobRepository extends JpaRepository<RefundJob, Long> {
 
+	@Query(value = "SELECT COALESCE(MAX(id), 0) FROM refund_job", nativeQuery = true)
+	long findMaxJobId();
+
+	@Query(value = """
+			SELECT job.id AS jobId, idempotency_key AS idempotencyKey
+			FROM refund_job job JOIN refund ON refund.id = job.refund_id
+			WHERE job.id > :afterId AND job.id <= :maxId
+			  AND job.status IN ('COMPLETED', 'NEEDS_REVIEW')
+			ORDER BY job.id
+			LIMIT 20
+			""", nativeQuery = true)
+	List<ReconciliationCandidate> findReconciliationCandidates(
+			@Param("afterId") long afterId, @Param("maxId") long maxId);
+
+	interface ReconciliationCandidate {
+		long getJobId();
+		String getIdempotencyKey();
+	}
+
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	@Query("SELECT job FROM RefundJob job WHERE job.id = :id")
 	Optional<RefundJob> findByIdForUpdate(@Param("id") long id);

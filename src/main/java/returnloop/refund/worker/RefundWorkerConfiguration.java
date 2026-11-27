@@ -1,11 +1,9 @@
 package returnloop.refund.worker;
 
-import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 
 import returnloop.refund.domain.RefundJobRepository;
-import returnloop.refund.pg.HttpRefundGateway;
 import returnloop.refund.pg.RefundGateway;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -18,13 +16,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @ConditionalOnProperty(prefix = "returnloop.refund.worker", name = "enabled", havingValue = "true")
 @EnableScheduling
 class RefundWorkerConfiguration {
-
-	@Bean
-	RefundGateway refundGateway(
-			@Value("${returnloop.refund.worker.pg-base-url}") URI baseUrl,
-			@Value("${returnloop.refund.worker.pg-timeout}") Duration timeout) {
-		return new HttpRefundGateway(baseUrl, timeout);
-	}
 
 	@Bean
 	RefundWorker refundWorker(RefundWorkerTransactionService transactions, RefundGateway gateway,
